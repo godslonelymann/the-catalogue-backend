@@ -1,0 +1,19 @@
+# systemd unit for the API. Install on EC2:
+#   sudo cp deploy/the-catalogue-backend.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now the-catalogue-backend
+[Unit]
+Description=The Catalogue API (FastAPI)
+After=network.target postgresql.service
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/the-catalogue-backend
+EnvironmentFile=/home/ubuntu/the-catalogue-backend/.env
+# Only localhost: Caddy is the public entry point (HTTPS on 443).
+ExecStart=/home/ubuntu/the-catalogue-backend/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 2 --proxy-headers
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
