@@ -12,6 +12,7 @@ class Settings:
     cors_origins: list[str]
     telegram_bot_token: str | None
     telegram_chat_id: str | None
+    log_level: str = "INFO"   # DEBUG adds more detail; set LOG_LEVEL in .env
 
 
 def load_settings() -> Settings:
@@ -25,4 +26,5 @@ def load_settings() -> Settings:
         cors_origins=[o.strip().rstrip("/") for o in origins.split(",") if o.strip()],
         telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN") or None,
         telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID") or None,
+        log_level=(os.environ.get("LOG_LEVEL") or "INFO").upper(),
     )

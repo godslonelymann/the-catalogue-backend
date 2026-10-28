@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from app.db import get_conn
@@ -5,6 +7,7 @@ from app.queries import CARD_SELECT, card_from_row
 from app.schemas import Page, WishlistCreate, WishlistItem
 
 router = APIRouter(tags=["wishlist"])
+log = logging.getLogger("app.wishlist")
 
 
 def _item(row: dict) -> dict:
@@ -29,17 +32,22 @@ def list_wishlist(
 @router.post("/wishlist", response_model=WishlistItem, status_code=status.HTTP_201_CREATED)
 def add_to_wishlist(body: WishlistCreate, conn=Depends(get_conn)):
     """Add a product. Adding it a second time returns the existing item."""
-    conn.execute(
+    inserted = conn.execute(
         """
         INSERT INTO app.wishlist (product_id)
         SELECT id FROM catalog.products WHERE id = %s AND NOT is_gift_card
         ON CONFLICT (product_id) DO NOTHING
+        RETURNING id
         """,
         (body.product_id,),
-    )
+    ).fetchone()
     row = conn.execute(f"{CARD_SELECT} WHERE p.id = %s AND w.id IS NOT NULL", (body.product_id,)).fetchone()
     if not row:
         raise HTTPException(404, "Product not found")
+    log.info(
+        "%s product %s (%s / %s) as item %s",
+        "added" if inserted else "already had", body.product_id, row["brand_name"], row["title"], row["wishlist_id"],
+    )
     return _item(row)
 
 
@@ -48,4 +56,5 @@ def remove_from_wishlist(wishlist_id: int, conn=Depends(get_conn)):
     deleted = conn.execute("DELETE FROM app.wishlist WHERE id = %s RETURNING id", (wishlist_id,)).fetchone()
     if not deleted:
         raise HTTPException(404, "Wishlist item not found")
+    log.info("removed item %s", wishlist_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

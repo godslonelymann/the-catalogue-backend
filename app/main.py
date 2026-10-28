@@ -1,9 +1,12 @@
 """FastAPI app. Run: uvicorn app.main:app --port 8000"""
 
 import logging
+import time
 from contextlib import asynccontextmanager
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.exception_handlers import http_exception_handler, request_validation_exception_handler
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -13,6 +16,11 @@ from app.routes import alerts, brands, products, wishlist
 
 log = logging.getLogger("app")
 settings = load_settings()
+
+# Our own loggers (app.*). Uvicorn keeps its own access log; both go to the systemd journal.
+logging.basicConfig(level=settings.log_level, format="%(levelname)s %(name)s: %(message)s")
+
+SLOW_REQUEST_S = 1.0
 
 
 @asynccontextmanager
@@ -31,6 +39,33 @@ app.add_middleware(
     allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["Content-Type"],
 )
+
+
+@app.middleware("http")
+async def log_slow_requests(request: Request, call_next):
+    # The access log has no timings: flag slow requests so they are easy to find.
+    started = time.monotonic()
+    response = await call_next(request)
+    elapsed = time.monotonic() - started
+    if elapsed >= SLOW_REQUEST_S:
+        log.warning("slow request: %s %s took %.2f s", request.method, request.url.path, elapsed)
+    else:
+        log.debug("%s %s took %.3f s", request.method, request.url.path, elapsed)
+    return response
+
+
+@app.exception_handler(HTTPException)
+async def log_http_error(request: Request, exc: HTTPException):
+    # 404 / 409 etc.: the access log only shows the status, so log the reason too.
+    log.info("%s %s -> %d: %s", request.method, request.url.path, exc.status_code, exc.detail)
+    return await http_exception_handler(request, exc)
+
+
+@app.exception_handler(RequestValidationError)
+async def log_validation_error(request: Request, exc: RequestValidationError):
+    fields = ", ".join(".".join(str(part) for part in e["loc"]) for e in exc.errors())
+    log.info("%s %s -> 422: invalid %s", request.method, request.url.path, fields)
+    return await request_validation_exception_handler(request, exc)
 
 
 @app.exception_handler(Exception)

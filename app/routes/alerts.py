@@ -1,3 +1,4 @@
+import logging
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
@@ -7,6 +8,7 @@ from app.queries import ALERT_SELECT
 from app.schemas import Alert, AlertCreate, Page
 
 router = APIRouter(tags=["alerts"])
+log = logging.getLogger("app.alerts")
 
 
 @router.get("/alerts", response_model=Page[Alert])
@@ -47,16 +49,23 @@ def create_alert(body: AlertCreate, conn=Depends(get_conn)):
     if variant["available"]:
         raise HTTPException(409, "This size is in stock now. Alerts are only for sold-out sizes.")
 
-    conn.execute(
+    inserted = conn.execute(
         """
         INSERT INTO app.alerts (variant_id) VALUES (%s)
         ON CONFLICT (variant_id) WHERE status = 'active' DO NOTHING
+        RETURNING id
         """,
         (body.variant_id,),
-    )
-    return conn.execute(
+    ).fetchone()
+    alert = conn.execute(
         f"{ALERT_SELECT} WHERE a.variant_id = %s AND a.status = 'active'", (body.variant_id,)
     ).fetchone()
+    log.info(
+        "%s alert %s on variant %s (%s / %s, size %s)",
+        "created" if inserted else "already had", alert["id"], body.variant_id,
+        alert["brand_name"], alert["product_title"], alert["size_norm"] or alert["variant_title"],
+    )
+    return alert
 
 
 @router.delete("/alerts/{alert_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -68,4 +77,5 @@ def cancel_alert(alert_id: int, conn=Depends(get_conn)):
     ).fetchone()
     if not cancelled:
         raise HTTPException(404, "Alert not found")
+    log.info("cancelled alert %s", alert_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

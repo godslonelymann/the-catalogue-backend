@@ -1,0 +1,13 @@
+# Weekly rotation of the alert checker log, keeps 8 weeks (compressed). Install on EC2:
+#   sudo cp deploy/the-catalogue-backend.logrotate /etc/logrotate.d/the-catalogue-backend
+#   sudo logrotate --debug /etc/logrotate.d/the-catalogue-backend   # dry run, changes nothing
+# The API itself logs to the systemd journal, which rotates on its own.
+/home/ubuntu/the-catalogue-backend/logs/*.log {
+    su ubuntu ubuntu
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+}

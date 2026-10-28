@@ -80,13 +80,14 @@ def send_alert(client: httpx.Client, token: str, chat_id: str, alert: dict) -> N
 
 
 def main() -> int:
+    settings = load_settings()
     logging.basicConfig(
-        level=logging.INFO,
+        level=settings.log_level,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         stream=sys.stdout,
     )
     logging.getLogger("httpx").setLevel(logging.WARNING)
-    settings = load_settings()
+    started = time.monotonic()
     if not (settings.telegram_bot_token and settings.telegram_chat_id):
         log.error("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID must be set")
         return 1
@@ -110,10 +111,14 @@ def main() -> int:
                 "WHERE id = %s AND status = 'active'",
                 (alert["alert_id"],),
             )
+            log.info(
+                "alert %s sent: %s / %s, size %s",
+                alert["alert_id"], alert["brand_name"], alert["title"], alert["size_norm"] or alert["variant_title"],
+            )
             sent += 1
             time.sleep(1)  # Telegram allows about 1 message per second per chat
 
-    log.info("done: %d sent, %d failed", sent, failed)
+    log.info("done: %d sent, %d failed (%.1f s)", sent, failed, time.monotonic() - started)
     return 0 if failed == 0 else 1
 
 

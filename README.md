@@ -68,6 +68,19 @@ Cron (IST): `0 3 * * *  cd ~/the-catalogue-backend && .venv/bin/python -m notifi
 
 Update: `git pull && sudo systemctl restart the-catalogue-backend`.
 
+## Logs
+
+| What | Where | Read it |
+|---|---|---|
+| API requests (uvicorn access log) | systemd journal | `journalctl -u the-catalogue-backend -f` |
+| API actions: wishlist add/remove, alert create/cancel, 4xx reasons, slow requests (> 1 s), 500 errors | systemd journal | same |
+| Alert checker: each alert sent, failures, run time | `logs/alerts.log` | `tail logs/alerts.log` |
+| Public requests to the API | Caddy, `/var/log/caddy/access.log` (JSON) | `sudo tail -f /var/log/caddy/access.log` |
+
+`LOG_LEVEL=DEBUG` in `.env` adds one line per request with its time (restart the service).
+Rotation: the journal and Caddy rotate on their own. For `logs/alerts.log`:
+`sudo cp deploy/the-catalogue-backend.logrotate /etc/logrotate.d/the-catalogue-backend`.
+
 ## Tests
 
 ```bash
