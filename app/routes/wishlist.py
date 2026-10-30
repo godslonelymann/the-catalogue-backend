@@ -3,6 +3,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from app.db import get_conn
+from app.changes import ChangeFilter, change_filter
 from app.queries import CARD_SELECT, card_from_row
 from app.schemas import Page, WishlistCreate, WishlistItem
 
@@ -16,15 +17,26 @@ def _item(row: dict) -> dict:
 
 @router.get("/wishlist", response_model=Page[WishlistItem])
 def list_wishlist(
+    change: ChangeFilter | None = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(24, ge=1, le=100),
     conn=Depends(get_conn),
 ):
-    total = conn.execute("SELECT count(*) AS n FROM app.wishlist").fetchone()["n"]
+    params = {"limit": page_size, "offset": (page - 1) * page_size}
+    where = ["w.id IS NOT NULL"]
+    if change == "removed":
+        where.append("NOT p.is_active")  # Saved removed products remain visible after seven days.
+    elif change:
+        where.append(change_filter(change, params))
+    where_sql = " AND ".join(where)
+    total = conn.execute(
+        "SELECT count(*) AS n FROM catalog.products p "
+        f"JOIN app.wishlist w ON w.product_id = p.id WHERE {where_sql}", params,
+    ).fetchone()["n"]
     rows = conn.execute(
-        f"{CARD_SELECT} WHERE w.id IS NOT NULL ORDER BY w.added_at DESC, w.id DESC "
+        f"{CARD_SELECT} WHERE {where_sql} ORDER BY w.added_at DESC, w.id DESC "
         "LIMIT %(limit)s OFFSET %(offset)s",
-        {"limit": page_size, "offset": (page - 1) * page_size},
+        params,
     ).fetchall()
     return {"items": [_item(r) for r in rows], "total": total, "page": page, "page_size": page_size}
 

@@ -39,12 +39,24 @@ uvicorn app.main:app --reload --port 8000
 | GET | `/brands/{id}/products` | `size, category, min_price, max_price, in_stock (default true), on_sale, q, sort, page, page_size` |
 | GET | `/brands/{id}/filters` | Sizes, categories and price range for the filter controls |
 | GET | `/products/{id}` | Detail with variants in store order, `wishlist_id`, `alert_id` per variant |
+| GET | `/updates` | Products with valid changes in the last 7 days; `brand_id, change, page, page_size`; includes `last_checked_at` |
 | GET / POST | `/wishlist` | POST `{product_id}`; adding twice returns the same item |
 | DELETE | `/wishlist/{id}` | |
 | GET / POST | `/alerts` | POST `{variant_id}`; **409** if the variant is in stock now |
 | DELETE | `/alerts/{id}` | Sets status `cancelled` |
 
 Gift cards and inactive products are hidden from listings. Money is sent as strings (`"1299.00"`).
+
+Product cards include `recent_changes` and `last_seen_at`; detail includes the latest
+50 recorded `changes`. Brand listings accept `change=all|new|price_drop|restock` and
+`sort=recently_updated`. Wishlist accepts these change filters plus `change=removed`;
+removed saved products remain visible beyond seven days. A price drop/restock badge
+only appears while that variant is active, in stock, and (for price drops) still at
+the observed lower price. When a size filter is present, it matches the variant that
+changed. Filter options also include the brand's `last_checked_at`.
+
+Apply the pipeline's updated `catalog_schema.sql` and run its history backfill before
+restarting this backend. The backend remains read-only on all `catalog` tables.
 
 ## Alert checker
 

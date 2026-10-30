@@ -4,8 +4,9 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.db import get_conn
+from app.changes import ChangeFilter, change_filter, history
 from app.queries import CARD_SELECT, card_from_row, like_pattern, size_sort_key
-from app.schemas import FilterOptions, Page, ProductCard, ProductDetail
+from app.schemas import FilterOptions, Page, ProductCard, ProductDetail, UpdatePage
 
 router = APIRouter(tags=["products"])
 
@@ -16,6 +17,7 @@ SORTS = {
     "price_desc": "s.price DESC NULLS LAST, p.id",
     "discount": "s.discount_pct DESC NULLS LAST, p.id",
     "title": "p.title, p.id",
+    "recently_updated": "updates.last_changed_at DESC NULLS LAST, p.id DESC",
 }
 
 # Products shown in listings: active, not gift cards.
@@ -37,7 +39,8 @@ def list_products(
     in_stock: bool = Query(True, description="Default true, else Urban Monkey is mostly sold out"),
     on_sale: bool = False,
     q: str | None = Query(None, max_length=100),
-    sort: Literal["newest", "price_asc", "price_desc", "discount", "title"] = "newest",
+    sort: Literal["newest", "price_asc", "price_desc", "discount", "title", "recently_updated"] = "newest",
+    change: ChangeFilter | None = None,
     page: int = Query(1, ge=1),
     page_size: int = Query(24, ge=1, le=100),
     conn=Depends(get_conn),
@@ -52,6 +55,8 @@ def list_products(
     if q and q.strip():
         where.append("(p.title ILIKE %(q)s OR array_to_string(p.tags, ' ') ILIKE %(q)s)")
         params["q"] = like_pattern(q.strip())
+    if change:
+        where.append(change_filter(change, params, size))
 
     # Variant filters: one variant must match all of them at once
     # (e.g. size M that is in stock and on sale).
@@ -82,6 +87,44 @@ def list_products(
         params,
     ).fetchall()
     return {"items": [card_from_row(r) for r in rows], "total": total, "page": page, "page_size": page_size}
+
+
+@router.get("/updates", response_model=UpdatePage)
+def recent_updates(
+    brand_id: int | None = Query(None, ge=1),
+    change: ChangeFilter = "all",
+    page: int = Query(1, ge=1),
+    page_size: int = Query(24, ge=1, le=100),
+    conn=Depends(get_conn),
+):
+    params: dict = {}
+    where = [VISIBLE, change_filter(change, params)]
+    if brand_id is not None:
+        _brand_exists(conn, brand_id)
+        where.append("p.brand_id = %(brand_id)s")
+        params["brand_id"] = brand_id
+    where_sql = " AND ".join(where)
+    total = conn.execute(
+        f"SELECT count(*) AS n FROM catalog.products p WHERE {where_sql}", params,
+    ).fetchone()["n"]
+    rows = conn.execute(
+        f"{CARD_SELECT} WHERE {where_sql} ORDER BY updates.last_changed_at DESC, p.id DESC "
+        "LIMIT %(limit)s OFFSET %(offset)s",
+        {**params, "limit": page_size, "offset": (page - 1) * page_size},
+    ).fetchall()
+    # Latest successful product observation per brand; the oldest of these is
+    # the conservative freshness value for a view spanning multiple brands.
+    checked = conn.execute(
+        """SELECT min(checked_at) AS checked_at FROM (
+               SELECT max(p.last_seen_at) AS checked_at
+               FROM catalog.brands b LEFT JOIN catalog.products p ON p.brand_id = b.id
+               WHERE b.is_active AND (%(brand_id)s::int IS NULL OR b.id = %(brand_id)s)
+               GROUP BY b.id
+           ) brands""",
+        {"brand_id": brand_id},
+    ).fetchone()["checked_at"]
+    return {"items": [card_from_row(r) for r in rows], "total": total, "page": page,
+            "page_size": page_size, "last_checked_at": checked}
 
 
 @router.get("/brands/{brand_id}/filters", response_model=FilterOptions)
@@ -120,7 +163,10 @@ def filter_options(brand_id: int, conn=Depends(get_conn)):
     ).fetchone()
     # Only letter sizes, numbers and ONE SIZE: values like "BLK_001" or "52MM" are not useful filters.
     sizes = sorted((s for s in sizes if size_sort_key(s)[0] < 3), key=size_sort_key)
-    return {"sizes": sizes, "categories": categories, **prices}
+    checked = conn.execute(
+        "SELECT max(last_seen_at) AS checked_at FROM catalog.products WHERE brand_id = %s", (brand_id,),
+    ).fetchone()["checked_at"]
+    return {"sizes": sizes, "categories": categories, **prices, "last_checked_at": checked}
 
 
 @router.get("/products/{product_id}", response_model=ProductDetail)
@@ -130,7 +176,7 @@ def product_detail(product_id: int, conn=Depends(get_conn)):
     product = conn.execute(
         """
         SELECT p.id, p.brand_id, b.name AS brand_name, p.title, p.category, p.product_type,
-               p.tags, p.body_html, p.image_urls, p.options, p.is_active, p.shopify_created_at,
+               p.tags, p.body_html, p.image_urls, p.options, p.is_active, p.shopify_created_at, p.last_seen_at,
                b.base_url || '/products/' || p.handle AS url,
                w.id AS wishlist_id
         FROM catalog.products p
@@ -154,4 +200,5 @@ def product_detail(product_id: int, conn=Depends(get_conn)):
         """,
         (product_id,),
     ).fetchall()
+    product["changes"] = history(conn, product_id)
     return product

@@ -5,9 +5,9 @@ Money fields are Decimal. They are sent as JSON strings (e.g. "1299.00") so no p
 
 from datetime import datetime
 from decimal import Decimal
-from typing import Generic, TypeVar
+from typing import Generic, Literal, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 T = TypeVar("T")
 
@@ -31,6 +31,17 @@ class FilterOptions(BaseModel):
     categories: list[str]
     min_price: Decimal | None
     max_price: Decimal | None
+    last_checked_at: datetime | None = None
+
+
+class ProductChange(BaseModel):
+    id: int
+    event_type: Literal["new", "price_drop", "price_increase", "restock", "sold_out", "removed", "relisted"]
+    variant_id: int | None
+    variant_label: str | None
+    old_price: Decimal | None
+    new_price: Decimal | None
+    observed_at: datetime
 
 
 class ProductCard(BaseModel):
@@ -49,6 +60,12 @@ class ProductCard(BaseModel):
     is_active: bool
     shopify_created_at: datetime | None
     wishlist_id: int | None
+    last_seen_at: datetime
+    recent_changes: list[ProductChange] = Field(default_factory=list)
+
+
+class UpdatePage(Page[ProductCard]):
+    last_checked_at: datetime | None
 
 
 class Variant(BaseModel):
@@ -83,6 +100,8 @@ class ProductDetail(BaseModel):
     shopify_created_at: datetime | None
     wishlist_id: int | None
     variants: list[Variant]   # sorted by store position
+    last_seen_at: datetime
+    changes: list[ProductChange] = Field(default_factory=list)
 
 
 class WishlistCreate(BaseModel):

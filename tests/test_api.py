@@ -242,3 +242,83 @@ def test_cors_allows_only_frontend_origin(client):
     assert ok.headers.get("access-control-allow-origin") == "https://the-catalogue.vercel.app"
     other = client.get("/brands", headers={"Origin": "https://evil.example"})
     assert "access-control-allow-origin" not in other.headers
+
+
+# ---------------------------------------------------------------- product changes
+
+def seed_changes(admin):
+    admin.execute("""
+        INSERT INTO catalog.product_changes
+            (product_id, variant_id, event_type, variant_label, old_price, new_price, observed_at)
+        VALUES
+            (1, 11, 'price_drop', 'S', 1299.50, 999.00, now() - interval '1 hour'),
+            (1, 13, 'restock', 'L', 1099.00, 1099.00, now() - interval '2 hours'),
+            (2, 21, 'restock', 'M', 1999.00, 1999.00, now() - interval '1 hour'),
+            (4, NULL, 'removed', NULL, NULL, NULL, now() - interval '1 hour'),
+            (5, NULL, 'new', NULL, NULL, NULL, now() - interval '8 days'),
+            (6, NULL, 'new', NULL, NULL, NULL, now() - interval '1 day')
+    """)
+
+
+def test_recent_updates_are_unique_products_and_paginated(client, admin):
+    seed_changes(admin)
+    response = client.get("/updates?page_size=1")
+    assert response.status_code == 200, response.text
+    page = response.json()
+    assert ids(page) == [1]
+    assert page["total"] == 2  # expired, sold-out, and inactive changes are excluded
+    assert page["last_checked_at"] is not None
+    assert ids(client.get("/updates?page=2&page_size=1").json()) == [6]
+    assert ids(client.get("/updates?brand_id=2&change=new").json()) == [6]
+    assert client.get("/updates?brand_id=99").status_code == 404
+    assert client.get("/updates?change=bad").status_code == 422
+
+
+def test_cards_expose_exact_previous_price_and_actual_restock_size(client, admin):
+    seed_changes(admin)
+    page = client.get("/brands/1/products?change=price_drop&sort=recently_updated").json()
+    assert ids(page) == [1]
+    changes = page["items"][0]["recent_changes"]
+    drop = next(c for c in changes if c["event_type"] == "price_drop")
+    assert drop["old_price"] == "1299.50" and drop["new_price"] == "999.00"
+    assert next(c for c in changes if c["event_type"] == "restock")["variant_label"] == "L"
+    assert ids(client.get("/brands/1/products?change=restock&size=L").json()) == [1]
+    assert ids(client.get("/brands/1/products?change=restock&size=S").json()) == []
+
+
+def test_badges_disappear_when_offer_no_longer_exists_but_history_remains(client, admin):
+    seed_changes(admin)
+    admin.execute("UPDATE catalog.variants SET price = 1499, compare_at_price = NULL WHERE id = 11")
+    assert client.get("/updates?change=price_drop").json()["total"] == 0
+    admin.execute("UPDATE catalog.variants SET available = false WHERE id = 13")
+    assert client.get("/updates?change=restock").json()["total"] == 0
+    product = client.get("/products/1").json()
+    assert len(product["changes"]) == 2
+    assert product["last_seen_at"]
+
+
+def test_wishlist_change_filters_keep_removed_products(client, admin):
+    seed_changes(admin)
+    client.post("/wishlist", json={"product_id": 1})
+    client.post("/wishlist", json={"product_id": 4})
+    assert client.get("/wishlist?change=price_drop").json()["items"][0]["product"]["id"] == 1
+    admin.execute("UPDATE catalog.product_changes SET observed_at = now() - interval '30 days' WHERE event_type = 'removed'")
+    removed = client.get("/wishlist?change=removed").json()
+    assert removed["total"] == 1 and removed["items"][0]["product"]["is_active"] is False
+    assert client.get("/wishlist?change=all").json()["total"] == 1
+
+
+def test_history_hides_gift_cards_and_future_events_do_not_become_updates(client, admin):
+    admin.execute("""INSERT INTO catalog.product_changes (product_id, event_type, observed_at)
+                     VALUES (5, 'new', now() + interval '1 day')""")
+    assert client.get("/updates").json()["total"] == 0
+    assert client.get("/products/3").status_code == 404
+
+
+def test_change_history_is_bounded_and_latest_first(client, admin):
+    admin.execute("""INSERT INTO catalog.product_changes (product_id, event_type, observed_at)
+                     SELECT 1, 'relisted', now() - n * interval '1 minute'
+                     FROM generate_series(1, 60) n""")
+    changes = client.get("/products/1").json()["changes"]
+    assert len(changes) == 50
+    assert changes[0]["observed_at"] > changes[-1]["observed_at"]

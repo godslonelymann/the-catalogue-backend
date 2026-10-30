@@ -2,6 +2,8 @@
 
 import re
 
+from app.changes import RECENT_JOIN
+
 # One product card. The shown price is the cheapest in-stock variant
 # (or the cheapest variant when all are sold out); compare_at_price and
 # discount_pct come from that same variant.
@@ -9,7 +11,8 @@ CARD_SELECT = """
 SELECT p.id, p.brand_id, b.name AS brand_name, p.title, p.category,
        p.image_urls[1] AS image_url,
        b.base_url || '/products/' || p.handle AS url,
-       p.is_active, p.shopify_created_at,
+       p.is_active, p.shopify_created_at, p.last_seen_at,
+       updates.recent_changes,
        s.price, s.compare_at_price, s.discount_pct,
        coalesce(s.in_stock, false) AS in_stock,
        coalesce(s.sizes, '{}') AS sizes,
@@ -27,7 +30,7 @@ LEFT JOIN LATERAL (
     FROM catalog.variants v
     WHERE v.product_id = p.id AND v.is_active
 ) s ON true
-"""
+""" + RECENT_JOIN
 
 ALERT_SELECT = """
 SELECT a.id, a.status, a.created_at, a.last_fired_at,
