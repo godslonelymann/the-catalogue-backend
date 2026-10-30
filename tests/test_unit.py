@@ -80,7 +80,7 @@ def test_send_alert_falls_back_to_text_when_photo_fails():
     def handler(request):
         calls.append(request.url.path)
         status = 400 if request.url.path.endswith("sendPhoto") else 200
-        return httpx.Response(status, json={"ok": status == 200})
+        return httpx.Response(status, json={})
 
     send_alert(_client(handler), "TOKEN", "42", ALERT)
     assert calls == ["/botTOKEN/sendPhoto", "/botTOKEN/sendMessage"]

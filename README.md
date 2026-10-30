@@ -5,7 +5,7 @@ It reads `catalog.*` (written by the pipeline) and owns `app.*` (wishlist, alert
 
 ```
 Browser ──HTTPS──► Caddy :443 ──► uvicorn 127.0.0.1:8000 ──► Postgres (as app_user)
-Airflow after brand saves ──► notifier/check_alerts.py ──► Telegram
+cron 3:00 ──► notifier/check_alerts.py ──► Telegram
 ```
 
 ## Setup
@@ -20,7 +20,6 @@ cp .env.example .env        # then fill in DATABASE_URL, TELEGRAM_*, CORS_ORIGIN
 
 ```bash
 psql -h localhost -U postgres -d brands -f sql/app_schema.sql
-psql -h localhost -U postgres -d brands -f sql/alert_delivery_schema.sql
 psql -h localhost -U postgres -d brands -c "ALTER ROLE app_user LOGIN PASSWORD 'change-me'"
 ```
 
@@ -67,17 +66,7 @@ python -m notifier.check_alerts
 
 Finds active alerts whose variant is back in stock, sends one Telegram message each
 (photo + title, brand, size, price, link), then marks them `fired`.
-Airflow calls `deliver_alerts(..., brand_ids=[...], run_id=...)` with only brands
-successfully saved in the current workflow. An empty list sends nothing. The CLI
-checks all brands and is retained for maintenance.
-
-Apply `sql/alert_delivery_schema.sql` before deploying this notifier. It adds
-`app.alert_deliveries` with delivery status, attempts, and Telegram message IDs.
-All callers share a database sender lock. Confirmed rejection can retry; timeouts,
-transport errors, HTTP 5xx, and interrupted sends are held as `uncertain` for
-operator review. Photo fallback only follows an explicit HTTP 400 rejection.
-See the pipeline's [Airflow deployment guide](../the-catalogue-pipeline/airflow/README.md)
-for recovery and the cron switchover.
+A message that fails is retried on the next run.
 
 ## Deploy on EC2
 
@@ -87,7 +76,7 @@ sudo systemctl daemon-reload && sudo systemctl enable --now the-catalogue-backen
 sudo cp deploy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl restart caddy
 ```
 
-Remove the legacy 03:00 notifier cron after the Airflow rehearsal passes. Airflow invokes it after successful brand saves; do not leave both schedules enabled.
+Cron (IST): `0 3 * * *  cd ~/the-catalogue-backend && .venv/bin/python -m notifier.check_alerts >> logs/alerts.log 2>&1`
 
 Update: `git pull && sudo systemctl restart the-catalogue-backend`.
 
