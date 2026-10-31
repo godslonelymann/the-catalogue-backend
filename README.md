@@ -5,7 +5,7 @@ It reads `catalog.*` (written by the pipeline) and owns `app.*` (wishlist, alert
 
 ```
 Browser ──HTTPS──► Caddy :443 ──► uvicorn 127.0.0.1:8000 ──► Postgres (as app_user)
-cron 3:00 ──► notifier/check_alerts.py ──► Telegram
+Airflow, after successful refresh ──► notifier/check_alerts.py ──► Telegram
 ```
 
 ## Setup
@@ -60,6 +60,11 @@ restarting this backend. The backend remains read-only on all `catalog` tables.
 
 ## Alert checker
 
+After Airflow cutover, the pipeline repo's `catalogue_daily` DAG runs this command
+only after a successful product refresh. It uses this backend's `.venv` and `.env`;
+Airflow is not a backend dependency. See the pipeline repo's
+`deploy/airflow/README.md` for setup and the cron cutover steps.
+
 ```bash
 python -m notifier.check_alerts
 ```
@@ -76,7 +81,8 @@ sudo systemctl daemon-reload && sudo systemctl enable --now the-catalogue-backen
 sudo cp deploy/Caddyfile /etc/caddy/Caddyfile && sudo systemctl restart caddy
 ```
 
-Cron (IST): `0 3 * * *  cd ~/the-catalogue-backend && .venv/bin/python -m notifier.check_alerts >> logs/alerts.log 2>&1`
+Legacy cron (IST): `0 3 * * *  cd ~/the-catalogue-backend && .venv/bin/python -m notifier.check_alerts >> logs/alerts.log 2>&1`
+Remove this entry before enabling Airflow's `catalogue_daily` DAG. Do not run both.
 
 Update: `git pull && sudo systemctl restart the-catalogue-backend`.
 
@@ -86,7 +92,7 @@ Update: `git pull && sudo systemctl restart the-catalogue-backend`.
 |---|---|---|
 | API requests (uvicorn access log) | systemd journal | `journalctl -u the-catalogue-backend -f` |
 | API actions: wishlist add/remove, alert create/cancel, 4xx reasons, slow requests (> 1 s), 500 errors | systemd journal | same |
-| Alert checker: each alert sent, failures, run time | `logs/alerts.log` | `tail logs/alerts.log` |
+| Alert checker: each alert sent, failures, run time | Airflow task logs after cutover; `logs/alerts.log` under legacy cron | Airflow dashboard → `send_restock_alerts` → Logs |
 | Public requests to the API | Caddy, `/var/log/caddy/access.log` (JSON) | `sudo tail -f /var/log/caddy/access.log` |
 
 `LOG_LEVEL=DEBUG` in `.env` adds one line per request with its time (restart the service).

@@ -1,6 +1,7 @@
 """Restock alert checker: python -m notifier.check_alerts
 
-Runs by cron at 3:00 AM IST, after the pipeline:
+Airflow runs this after a successful daily pipeline refresh after cutover.
+Legacy scheduling is cron at 3:00 AM IST; do not enable both schedulers.
 1. Find active alerts whose variant is now in stock.
 2. Send one Telegram message per alert.
 3. Mark the alert fired.
